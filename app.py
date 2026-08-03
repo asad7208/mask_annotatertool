@@ -91,11 +91,13 @@ class ImageCanvas(QWidget):
 
     mask_changed = Signal()
     history_changed = Signal(bool, bool)
+    brush_stroke = Signal(QPointF, QPointF, bool)
 
     def __init__(self, editable: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._editable = editable
         self._editing_allowed = editable
+        self._brush_input_enabled = False
         self._image = QImage()
         self._brush_size = 24
         self._paint_value = 255
@@ -105,7 +107,7 @@ class ImageCanvas(QWidget):
         self._undo_stack: list[QImage] = []
         self._redo_stack: list[QImage] = []
         self.setMinimumSize(280, 240)
-        self.setMouseTracking(editable)
+        self.setMouseTracking(True)
         if editable:
             self.setCursor(Qt.CursorShape.CrossCursor)
 
@@ -135,17 +137,37 @@ class ImageCanvas(QWidget):
 
     def set_editing_allowed(self, allowed: bool) -> None:
         self._editing_allowed = allowed
+        self._update_brush_cursor()
+
+    def set_brush_input_enabled(self, enabled: bool) -> None:
+        """Enable context painting: forward strokes without altering this displayed image."""
+        self._brush_input_enabled = enabled
+        self._update_brush_cursor()
+
+    def _update_brush_cursor(self) -> None:
         self._drawing = False
         self._last_image_pos = None
         self._cursor_image_pos = None
         self.setCursor(
-            Qt.CursorShape.CrossCursor if self._editable and allowed else Qt.CursorShape.ArrowCursor
+            Qt.CursorShape.CrossCursor
+            if (self._editable and self._editing_allowed) or self._brush_input_enabled
+            else Qt.CursorShape.ArrowCursor
         )
         self.update()
 
     def set_paint_value(self, value: int) -> None:
         self._paint_value = 255 if value else 0
-        self.setCursor(Qt.CursorShape.CrossCursor)
+        self._update_brush_cursor()
+        self.update()
+
+    def apply_external_stroke(self, start: QPointF, end: QPointF, new_stroke: bool) -> None:
+        """Apply a stroke forwarded from the original-image context view."""
+        if not self._editable or not self._editing_allowed or self._image.isNull():
+            return
+        if new_stroke:
+            self._push_undo()
+        self._paint_segment(start, end)
+        self.mask_changed.emit()
         self.update()
 
     def clear_mask(self) -> None:
@@ -238,7 +260,7 @@ class ImageCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawImage(image_rect, self._image)
 
-        if self._editable and self._cursor_image_pos is not None:
+        if (self._editable or self._brush_input_enabled) and self._cursor_image_pos is not None:
             cursor = self._cursor_image_pos
             if 0 <= cursor.x() < self._image.width() and 0 <= cursor.y() < self._image.height():
                 scale = image_rect.width() / self._image.width()
@@ -251,29 +273,36 @@ class ImageCanvas(QWidget):
                 painter.drawEllipse(centre, radius, radius)
 
     def mousePressEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt naming
-        if (not self._editable or not self._editing_allowed
-                or event.button() != Qt.MouseButton.LeftButton):
+        can_accept_stroke = (self._editable and self._editing_allowed) or self._brush_input_enabled
+        if not can_accept_stroke or event.button() != Qt.MouseButton.LeftButton:
             return
         position = self._to_image_pos(event.position())
         if position is None:
             return
-        self._push_undo()
         self._drawing = True
         self._last_image_pos = position
         self._cursor_image_pos = position
-        self._paint_segment(position, position)
-        self.mask_changed.emit()
+        if self._editable:
+            self._push_undo()
+            self._paint_segment(position, position)
+            self.mask_changed.emit()
+        else:
+            self.brush_stroke.emit(position, position, True)
         self.update()
 
     def mouseMoveEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt naming
-        if not self._editable or not self._editing_allowed:
+        can_accept_stroke = (self._editable and self._editing_allowed) or self._brush_input_enabled
+        if not can_accept_stroke:
             return
         position = self._to_image_pos(event.position())
         self._cursor_image_pos = position
         if self._drawing and position is not None and self._last_image_pos is not None:
-            self._paint_segment(self._last_image_pos, position)
+            if self._editable:
+                self._paint_segment(self._last_image_pos, position)
+                self.mask_changed.emit()
+            else:
+                self.brush_stroke.emit(self._last_image_pos, position, False)
             self._last_image_pos = position
-            self.mask_changed.emit()
         self.update()
 
     def mouseReleaseEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt naming
@@ -328,6 +357,7 @@ class MaskAnnotator(QMainWindow):
 
         self.original_canvas = ImageCanvas(editable=False)
         self.mask_canvas = ImageCanvas(editable=True)
+        self.original_canvas.brush_stroke.connect(self.mask_canvas.apply_external_stroke)
         self.mask_canvas.mask_changed.connect(self._queue_autosave)
         self.mask_canvas.history_changed.connect(self._set_history_actions)
 
@@ -379,8 +409,8 @@ class MaskAnnotator(QMainWindow):
         brush_group.addAction(self.paint_action)
         brush_group.addAction(self.erase_action)
         self.paint_action.setChecked(True)
-        self.paint_action.triggered.connect(lambda: self.mask_canvas.set_paint_value(255))
-        self.erase_action.triggered.connect(lambda: self.mask_canvas.set_paint_value(0))
+        self.paint_action.triggered.connect(lambda: self._set_paint_value(255))
+        self.erase_action.triggered.connect(lambda: self._set_paint_value(0))
 
     def _build_ui(self) -> None:
         toolbar = QToolBar("Tools", self)
@@ -430,8 +460,8 @@ class MaskAnnotator(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        splitter.addWidget(CanvasPanel("Original image", self.original_canvas))
-        splitter.addWidget(CanvasPanel("Binary mask  •  Left-click to paint", self.mask_canvas))
+        splitter.addWidget(CanvasPanel("Original image  •  Paint here for context", self.original_canvas))
+        splitter.addWidget(CanvasPanel("Binary mask  •  Updates while you paint", self.mask_canvas))
         splitter.setSizes([700, 700])
         self.setCentralWidget(splitter)
 
@@ -770,7 +800,12 @@ class MaskAnnotator(QMainWindow):
             self.brush_slider.setValue(size)
         if self.brush_spinbox.value() != size:
             self.brush_spinbox.setValue(size)
+        self.original_canvas.set_brush_size(size)
         self.mask_canvas.set_brush_size(size)
+
+    def _set_paint_value(self, value: int) -> None:
+        self.original_canvas.set_paint_value(value)
+        self.mask_canvas.set_paint_value(value)
 
     def _set_history_actions(self, can_undo: bool, can_redo: bool) -> None:
         can_edit = self._source_path is not None and bool(self._selected_user)
@@ -780,6 +815,7 @@ class MaskAnnotator(QMainWindow):
     def _update_controls(self) -> None:
         active = self._source_path is not None
         can_edit = active and bool(self._selected_user)
+        self.original_canvas.set_brush_input_enabled(can_edit)
         self.mask_canvas.set_editing_allowed(can_edit)
         for action in (self.save_action, self.clear_action, self.invert_action,
                        self.paint_action, self.erase_action):

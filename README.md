@@ -21,7 +21,7 @@ python app.py
 
 2. Choose **Open project folder** and select `my-project`. The app loads every supported image in `images/` and looks for its matching mask in `masks/`. Missing masks start as blank, black masks.
 3. Select **Working as** in the top toolbar. Use **Edit users** to add the list of annotator names. A username is required before mask editing is enabled.
-4. Paint on the mask at right. **Paint white** adds foreground and **Erase to black** removes it. Adjust the brush in the toolbar.
+4. Paint either directly on the original image at left (recommended for visual context) or on the mask at right. Both use the same brush: **Paint white** adds foreground and **Erase to black** removes it. Every stroke updates the mask immediately and can be undone.
 5. Files are autosaved about half a second after an edit into `my-project/output/masks`. The original `images/` and `masks/` folders are never changed.
 
 The edited binary mask is saved as `<image-stem>.png` in `output/masks`. On completion, the original image is copied to `output/images` with the same name. On future sessions, the tool reloads the working mask from `output/masks`, so any user can continue editing it while the original mask remains available.
