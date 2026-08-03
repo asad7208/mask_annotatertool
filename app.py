@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSlider,
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -335,7 +337,15 @@ class MaskAnnotator(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Mask Annotator")
-        self.resize(1420, 850)
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            self.resize(
+                min(1420, max(840, available.width() - 40)),
+                min(850, max(600, available.height() - 60)),
+            )
+        else:
+            self.resize(1200, 760)
 
         self._config = self._read_config()
         configured_users = self._config.get("users", [])
@@ -376,12 +386,12 @@ class MaskAnnotator(QMainWindow):
 
     def _build_actions(self) -> None:
         self.open_folder_action = QAction(
-            "Open project folder…", self, shortcut=QKeySequence.StandardKey.Open
+            "Project…", self, shortcut=QKeySequence.StandardKey.Open
         )
         self.open_folder_action.triggered.connect(self._open_project_folder)
-        self.manage_users_action = QAction("Edit users…", self)
+        self.manage_users_action = QAction("Users…", self)
         self.manage_users_action.triggered.connect(self._edit_users)
-        self.save_action = QAction("Save, complete & next", self, shortcut=QKeySequence.StandardKey.Save)
+        self.save_action = QAction("Save + next", self, shortcut=QKeySequence.StandardKey.Save)
         self.save_action.triggered.connect(self._save_complete_and_next)
         self.complete_action = QAction("Mark complete", self, shortcut="Ctrl+Return")
         self.complete_action.triggered.connect(self._mark_current_complete)
@@ -402,8 +412,8 @@ class MaskAnnotator(QMainWindow):
         self.next_action = QAction("Next", self, shortcut="Right")
         self.next_action.triggered.connect(lambda: self._move_to_image(1))
 
-        self.paint_action = QAction("Paint white", self, checkable=True, shortcut="B")
-        self.erase_action = QAction("Erase to black", self, checkable=True, shortcut="E")
+        self.paint_action = QAction("Paint", self, checkable=True, shortcut="B")
+        self.erase_action = QAction("Erase", self, checkable=True, shortcut="E")
         brush_group = QActionGroup(self)
         brush_group.setExclusive(True)
         brush_group.addAction(self.paint_action)
@@ -415,16 +425,15 @@ class MaskAnnotator(QMainWindow):
     def _build_ui(self) -> None:
         toolbar = QToolBar("Tools", self)
         toolbar.setMovable(False)
-        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.addToolBar(toolbar)
-        user_label = QLabel("Working as")
+        user_label = QLabel("User")
         user_label.setObjectName("toolbarLabel")
         toolbar.addWidget(user_label)
         self.user_selector = QComboBox()
-        self.user_selector.setMinimumWidth(170)
+        self.user_selector.setMinimumWidth(135)
         self.user_selector.currentTextChanged.connect(self._set_active_user)
         toolbar.addWidget(self.user_selector)
-        toolbar.addAction(self.manage_users_action)
         toolbar.addSeparator()
         toolbar.addAction(self.open_folder_action)
         toolbar.addSeparator()
@@ -438,7 +447,7 @@ class MaskAnnotator(QMainWindow):
         self.brush_slider = QSlider(Qt.Orientation.Horizontal)
         self.brush_slider.setRange(1, 300)
         self.brush_slider.setValue(24)
-        self.brush_slider.setFixedWidth(130)
+        self.brush_slider.setFixedWidth(90)
         self.brush_slider.valueChanged.connect(self._set_brush_size)
         toolbar.addWidget(self.brush_slider)
         self.brush_spinbox = QSpinBox()
@@ -446,17 +455,26 @@ class MaskAnnotator(QMainWindow):
         self.brush_spinbox.setSuffix(" px")
         self.brush_spinbox.setValue(24)
         self.brush_spinbox.valueChanged.connect(self._set_brush_size)
-        toolbar.addWidget(self.brush_spinbox)
         toolbar.addSeparator()
-        toolbar.addAction(self.undo_action)
-        toolbar.addAction(self.redo_action)
-        toolbar.addAction(self.clear_action)
-        toolbar.addAction(self.invert_action)
         toolbar.addAction(self.save_action)
-        toolbar.addSeparator()
-        toolbar.addAction(self.complete_action)
-        toolbar.addAction(self.reopen_action)
-        toolbar.addAction(self.delete_action)
+        more_menu = QMenu("More actions", self)
+        more_menu.addAction(self.manage_users_action)
+        more_menu.addSeparator()
+        more_menu.addAction(self.undo_action)
+        more_menu.addAction(self.redo_action)
+        more_menu.addSeparator()
+        more_menu.addAction(self.clear_action)
+        more_menu.addAction(self.invert_action)
+        more_menu.addSeparator()
+        more_menu.addAction(self.complete_action)
+        more_menu.addAction(self.reopen_action)
+        more_menu.addAction(self.delete_action)
+        more_button = QToolButton(toolbar)
+        more_button.setText("More")
+        more_button.setToolTip("More editing and completion actions")
+        more_button.setMenu(more_menu)
+        more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        toolbar.addWidget(more_button)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
